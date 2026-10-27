@@ -1,5 +1,7 @@
 # douyin-send
 
+> 文档中的 example.com 域名、192.0.2.* 地址、/opt/operator 路径及 20000 段端口均为示例，请按实际部署配置替换。私有账号配置与运行数据不随源码提交。
+
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange)](LICENSE)
 
 独立运行的抖音用户与消息管理控制台，从 `bifrost/applications/douyin` 提取。
@@ -14,25 +16,25 @@ Python 后端、原生 HTML/JS 前端、SQLite 数据库，无需 Bifrost 或前
 
 任务概况、执行时间轴和账号统计集中展示。
 
-![总览大盘：演示任务和账号统计](docs/images/overview.png)
+总览大盘：演示任务和账号统计（本地资料）
 
 ### 用户管理
 
 查看搜索入库的用户，按指标和标签筛选，选择联系人创建任务。
 
-![用户管理：演示用户列表和标签筛选](docs/images/users.png)
+用户管理：演示用户列表和标签筛选（本地资料）
 
 ### 任务管理
 
 任务创建后保持未开始，可查看配置并手动开始、暂停或恢复。
 
-![任务管理：演示任务列表](docs/images/tasks.png)
+任务管理：演示任务列表（本地资料）
 
 ### 账号管理
 
 查看账号状态，管理账号发送节奏、工作时间和共享池。
 
-![账号管理：模拟账号与执行设置](docs/images/accounts.png)
+账号管理：模拟账号与执行设置（本地资料）
 
 ## 一键启动
 
@@ -48,7 +50,7 @@ python3 start.py
 ```
 
 Windows 可双击 `start.bat`；macOS 可双击 `start.command`；Linux 可运行 `./start.sh`。
-首次启动自动创建 `.venv`、安装依赖，成功后尝试打开 **http://127.0.0.1:8765**。
+首次启动自动创建 `.venv`、安装依赖，成功后尝试打开 **http://127.0.0.1:20000**。
 首次安装需要联网，后续依赖不变时直接启动。按 Ctrl+C 停止。
 
 默认是**演示模式**，账号、搜索及发送均为模拟，不需要 Cookie 或扫码。
@@ -57,7 +59,7 @@ Windows 可双击 `start.bat`；macOS 可双击 `start.command`；Linux 可运�
 端口被占用时：
 
 ```bash
-python3 start.py --port 8875
+python3 start.py --port 20024
 ```
 
 服务器或无需自动打开浏览器时：
@@ -107,13 +109,13 @@ node --check web/static/app.js
 
 ```bash
 docker build -t douyin-send .
-docker run --rm -p 127.0.0.1:8765:8765 -v douyin-send-data:/app/datas douyin-send
+docker run --rm -p 127.0.0.1:20000:20000 -v douyin-send-data:/app/datas douyin-send
 ```
 
 默认演示模式。真实模式运行：
 
 ```bash
-docker run --rm -p 127.0.0.1:8765:8765 -v douyin-send-data:/app/datas douyin-send python -m web --host 0.0.0.0
+docker run --rm -p 127.0.0.1:20000:20000 -v douyin-send-data:/app/datas douyin-send python -m web --host 0.0.0.0
 ```
 
 ## 目录

@@ -7,7 +7,7 @@
 
 - 演示：`.venv/bin/python -m web --demo`。
 - 真实：`.venv/bin/python -m web`。
-- 默认地址：`http://127.0.0.1:8765`，可用 `--port` 修改。
+- 默认地址：`http://127.0.0.1:20000`，可用 `--port` 修改。
 - `--data-dir /absolute/path` 指定独立数据目录。
 - `--host` 默认 `127.0.0.1`；容器内使用 `0.0.0.0`，宿主端口映射到回环地址。
 - 就绪探测：`GET /.well-known/bifrost/ready`，返回 `{"ready": true}`。
@@ -43,4 +43,4 @@ GitHub Actions 配置已提供，但远程仓库尚未创建，因此未运行�
 
 ## 2026-10-14 项目改名
 
-原目录整体移至 `/home/ubuntu/leo-project/douyin-send`，包含原 Git 历史、未提交修改、数据、凭证及虚拟环境。正式 `douyin-web.service` 工作目录和启动路径已更新，网站仍为 https://d.58nft.net:9445/，模式仍为原演示模式。原 14 项回归通过，HTTPS 首页通过检查。相邻的新 douyin 使用独立服务、端口、数据及 Channel 来源。Git 远程仓库仍保留原地址，未执行远程仓库改名。
+原目录整体移至 `/opt/operator/leo-project/douyin-send`，包含原 Git 历史、未提交修改、数据、凭证及虚拟环境。正式 `douyin-web.service` 工作目录和启动路径已更新，网站仍为 https://portal.example.com:20031/，模式仍为原演示模式。原 14 项回归通过，HTTPS 首页通过检查。相邻的新 douyin 使用独立服务、端口、数据及 Channel 来源。Git 远程仓库仍保留原地址，未执行远程仓库改名。
