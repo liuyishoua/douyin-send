@@ -118,13 +118,16 @@ export function conversationSession({uid,api,onUpdate=()=>{},onError=()=>{}}) {
 
 export function openConversation({dialog,showDialog,api,user,accountId,onClose=()=>{}}) {
   showDialog(`与 ${e(user.nickname||user.uid)} 对话`,
-    `<div class="chat-toolbar"><label>执行账号<select id="chat-account" aria-label="当前对话账号"></select></label><span id="chat-sync" class="hint" role="status">正在加载对话…</span></div><div id="chat-error" class="chat-error" role="status" hidden></div><div id="chat-scroll" class="chat-scroll" tabindex="0" aria-label="聊天记录"><button id="chat-older" class="chat-older">加载更早消息</button><div id="chat-messages"></div></div>`,
+    `<div class="chat-toolbar"><label>执行账号<select id="chat-account" aria-label="当前对话账号"></select></label><label>执行 Agent<select id="chat-ai-agent" disabled><option value="">正在读取目录…</option></select></label><button type="button" id="chat-ai-refresh">刷新 Agent</button><span id="chat-sync" class="hint" role="status">正在加载对话…</span></div><div id="chat-error" class="chat-error" role="status" hidden></div><div id="chat-scroll" class="chat-scroll" tabindex="0" aria-label="聊天记录"><button id="chat-older" class="chat-older">加载更早消息</button><div id="chat-messages"></div></div>`,
     '<form id="chat-compose" class="chat-compose"><textarea id="chat-input" aria-label="消息内容" placeholder="输入消息…" maxlength="2000" rows="3" required></textarea><div id="chat-image-draft" hidden></div><div id="chat-permission" class="hint" role="status"></div><div class="row spread"><div class="row"><button type="button" id="chat-ai-draft">AI 起草</button><button type="button" id="chat-image-pick">选择图片</button><input type="file" id="chat-image-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><span class="hint">文字或图片每次选一种</span></div><button id="chat-send" type="submit" class="primary">发送</button></div></form>');
   dialog.classList.add('conversation-dialog');
   const find=s=>dialog.querySelector(s),scroll=find('#chat-scroll'),list=find('#chat-messages'),select=find('#chat-account');
   const input=find('#chat-input'),sendButton=find('#chat-send'),older=find('#chat-older'),error=find('#chat-error');
   const imagePick=find('#chat-image-pick'),imageFile=find('#chat-image-file'),imageDraft=find('#chat-image-draft');
   let previousAccount,previousRows='',first=true,closed=false,lastState=null,imagePickerAccount;
+  const aiAgent=find('#chat-ai-agent');let directoryVersion=0;
+  async function loadAgents(){const aid=previousAccount,version=++directoryVersion;aiAgent.disabled=true;aiAgent.innerHTML='<option value="">正在读取目录…</option>';find('#chat-ai-draft').disabled=true;try{const catalog=await api('/channel/catalog?account_id='+encodeURIComponent(aid));if(closed||version!==directoryVersion||aid!==previousAccount)return;aiAgent.innerHTML='<option value="">请选择一个 Agent</option>'+catalog.agents.map(a=>`<option value="${e(a.id)}">${e(a.name||'未命名 Agent')}</option>`).join('');aiAgent.value=draftFor(aid).agentId||catalog.binding?.agent_id||'';aiAgent.disabled=false;find('#chat-ai-draft').disabled=false;}catch(err){if(!closed&&version===directoryVersion){aiAgent.innerHTML='<option value="">目录读取失败</option>';error.textContent=err.message;error.hidden=false;}}}
+  find('#chat-ai-refresh').onclick=loadAgents;aiAgent.onchange=()=>{const draft=draftFor(previousAccount);draft.agentId=aiAgent.value;directoryVersion++;if(draft.generated){draft.text='';draft.generated=null;input.value='';}};
   const drafts=new Map();
   const draftFor=aid=>{if(!drafts.has(aid))drafts.set(aid,{text:'',image:null,uploading:false,version:0});return drafts.get(aid);};
   const date=value=>value?new Date(value*1000).toLocaleString('zh-CN',{hour12:false}):'时间未记录';
@@ -137,7 +140,7 @@ export function openConversation({dialog,showDialog,api,user,accountId,onClose=(
     const options=state.accounts.map(a=>`<option value="${e(a.id)}">${e(a.name)}${a.can_send?'':'（暂不可发送）'}</option>`).join('');
     if(select.innerHTML!==options)select.innerHTML=options;
     select.value=state.account_id||'';select.disabled=state.sending;
-    if(switched){if(previousAccount)draftFor(previousAccount).text=input.value;previousAccount=state.account_id;first=true;input.value=draftFor(previousAccount).text;error.hidden=true;}
+    if(switched){if(previousAccount)draftFor(previousAccount).text=input.value;previousAccount=state.account_id;first=true;input.value=draftFor(previousAccount).text;error.hidden=true;loadAgents();}
     const rows=state.items.map(row=>`<div class="chat-line ${row.direction==='outgoing'?'outgoing':'incoming'}" data-chat-record="${e(row.record_id)}"><div class="chat-meta">${row.direction==='outgoing'?'我':e(user.nickname||user.uid)} · ${date(row.attempted_at)}</div><div class="chat-bubble">${(row.message_kind==='image'||row.message_type==='image')&&localImageURL(row.image_url)?`<img class="chat-image" src="${e(localImageURL(row.image_url))}" alt="对话图片" loading="lazy">`:e(row.message??'未记录正文')}</div>${row.direction==='outgoing'?`<div class="chat-result ${row.status==='failed'?'danger':''}">${e(({sending:'发送中…',sent:'已发送',failed:'发送失败'})[row.status]||row.status)}${row.error?' · '+e(row.error):''}</div>`:''}</div>`).join('')||'<div class="chat-empty">暂无聊天记录</div>';
     if(rows!==previousRows){list.innerHTML=rows;previousRows=rows;
       if(first||bottom)scroll.scrollTop=scroll.scrollHeight;
@@ -163,19 +166,19 @@ export function openConversation({dialog,showDialog,api,user,accountId,onClose=(
   }});
   select.addEventListener('change',()=>session.select(select.value));
   find('#chat-ai-draft').addEventListener('click',async()=>{
-    const button=find('#chat-ai-draft'),aid=previousAccount;button.disabled=true;error.hidden=true;
+    const button=find('#chat-ai-draft'),aid=previousAccount,agentId=aiAgent.value,version=directoryVersion;button.disabled=true;error.hidden=true;
     try{
-      if(!aid)throw Error('请先选择账号');
-      let message=await api('/channel/messages','POST',{account_id:aid,uid:user.uid,message_id:crypto.randomUUID(),text:'根据最近会话起草简洁自然的中文回复，不实际发送。'});
+      if(!aid)throw Error('请先选择账号');if(!agentId)throw Error('请选择一个 Agent');
+      let message=await api('/channel/messages','POST',{account_id:aid,agent_id:agentId,uid:user.uid,message_id:crypto.randomUUID(),text:'根据最近会话起草简洁自然的中文回复，不实际发送。'});
       error.textContent='AI 任务已提交，正在等待模型…';error.hidden=false;
       for(let i=0;i<180&&!closed;i++){
-        if(message.result){const output=message.result.output,text=output?.structured?.reply||output?.text;if(text){draftFor(aid).text=text;if(previousAccount===aid)input.value=text;error.textContent='AI 草稿已放入输入框，请检查后决定是否发送。';}else error.textContent=message.error||'模型没有返回正文';return;}
+        if(message.result){const output=message.result.output,text=output?.structured?.reply||output?.text;if(text){if(previousAccount!==aid||aiAgent.value!==agentId||directoryVersion!==version){error.textContent='Agent 或账号已切换，旧草稿只保留在任务历史中。';return;}draftFor(aid).text=text;draftFor(aid).generated=message.agent_snapshot;input.value=text;error.textContent=(message.agent_snapshot?.agent_name||'Agent')+' 的草稿已放入输入框，请检查后决定是否发送。';}else error.textContent=message.error||'模型没有返回正文';return;}
         if(['blocked_no_route','blocked_reply','failed_preflight','uncertain','attention'].includes(message.state))throw Error(message.error);
         await new Promise(r=>setTimeout(r,2000));message=await api('/channel/messages/'+message.id+'?account_id='+encodeURIComponent(aid));
       }
     }catch(err){if(!closed){error.textContent=err.message;error.hidden=false;}}finally{if(!closed)button.disabled=false;}
   });
-  input.addEventListener('input',()=>{if(previousAccount)draftFor(previousAccount).text=input.value;});
+  input.addEventListener('input',()=>{directoryVersion++;if(previousAccount){draftFor(previousAccount).text=input.value;draftFor(previousAccount).generated=null;}});
   imagePick.addEventListener('click',()=>{imagePickerAccount=previousAccount;imageFile.click();});
   imageDraft.addEventListener('click',ev=>{
     if(!ev.target.closest('#chat-image-remove')||lastState.sending)return;

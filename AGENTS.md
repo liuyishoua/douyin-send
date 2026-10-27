@@ -1,3 +1,7 @@
+# douyin-send
+
+2026-10-14：原 douyin 整体更名为 douyin-send，原工作和私有数据保留；新 douyin 是相邻独立监听项目。正式发送网站仍使用 9445，原 douyin-web.service 工作目录已更新。
+
 # AGENTS.md
 
 ## 独立仓库运行说明（优先于下方历史记录）

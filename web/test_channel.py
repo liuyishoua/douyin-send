@@ -1,5 +1,7 @@
 """Channel receives only the selected account's local conversation projection."""
 import unittest
+import tempfile
+from .db import Database
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -10,6 +12,8 @@ from .channel_bridge import register_channel
 
 class ChannelBridgeTests(unittest.TestCase):
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.db = Database(self.tmp.name)
         self.accounts = Mock()
         self.accounts.get.return_value = {'id': 'local-a', 'uid': 'platform-a'}
         self.conversation = Mock()
@@ -18,6 +22,8 @@ class ChannelBridgeTests(unittest.TestCase):
             'cookie': 'must-not-forward', 'raw': {'authorization': 'must-not-forward'},
         }]}
         self.channel = Mock()
+        self.channel.bind.return_value = {'route':{'id':'own-route','agent_id':'new-agent','version':1},'agent':{'name':'新 Agent'}}
+        self.channel.catalog.return_value = {'agents':[{'id':'new-agent','name':'新 Agent'}],'routes':[]}
         self.channel.send.return_value = {'event_id': 'event-1', 'state': 'queued'}
         self.channel.status.return_value = {'state': 'succeeded'}
         client_patch = patch('web.channel_bridge.ChannelClient', return_value=self.channel)
@@ -26,9 +32,9 @@ class ChannelBridgeTests(unittest.TestCase):
         app = Flask(__name__)
         app.config['TESTING'] = True
         app.register_error_handler(ValueError, lambda error: ({'error': str(error)}, 400))
-        register_channel(app, SimpleNamespace(accounts=self.accounts, conversation=self.conversation))
+        register_channel(app, SimpleNamespace(accounts=self.accounts, conversation=self.conversation, db=self.db))
         self.client = app.test_client()
-        self.payload = {'account_id': 'local-a', 'uid': 'peer-a', 'message_id': 'unique-message-1'}
+        self.payload = {'account_id': 'local-a', 'uid': 'peer-a', 'message_id': 'unique-message-1','agent_id':'new-agent'}
 
     def test_submission_uses_account_identity_and_whitelisted_local_context(self):
         response = self.client.post('/api/channel/messages', json=self.payload)
@@ -37,6 +43,8 @@ class ChannelBridgeTests(unittest.TestCase):
         self.conversation.list.assert_called_once_with('peer-a', {'account_id': 'local-a', 'limit': 20})
         args, kwargs = self.channel.send.call_args
         self.assertEqual(args[:2], ('platform-a', 'unique-message-1'))
+        self.assertEqual(kwargs['route_id'], 'own-route')
+        self.channel.bind.assert_called_once_with('platform-a','dm','new-agent')
         self.assertEqual(kwargs['category'], 'reply_draft')
         self.assertEqual(kwargs['conversation_id'], 'peer-a')
         self.assertEqual(kwargs['surface'], 'dm')
@@ -64,6 +72,25 @@ class ChannelBridgeTests(unittest.TestCase):
         self.channel.send.reset_mock()
         self.payload.pop('message_id')
         self.assertEqual(self.client.post('/api/channel/messages', json=self.payload).status_code, 400)
+        self.channel.send.assert_not_called()
+
+
+    def test_live_directory_and_immutable_history(self):
+        self.assertEqual(self.client.get('/api/channel/catalog?account_id=local-a').json['agents'][0]['name'],'新 Agent')
+        self.channel.catalog.return_value['agents'][0]['name']='改名 Agent'
+        self.assertEqual(self.client.get('/api/channel/catalog?account_id=local-a').json['agents'][0]['name'],'改名 Agent')
+        self.client.post('/api/channel/messages',json=self.payload)
+        self.channel.bind.return_value['agent']['name']='后续改名'
+        self.client.post('/api/channel/messages',json=self.payload)
+        self.assertEqual(self.client.get('/api/channel/messages/event-1?account_id=local-a').json['agent_snapshot']['agent_name'],'新 Agent')
+        self.accounts.get.return_value={'id':'local-b','uid':'platform-b'}
+        self.assertEqual(self.client.get('/api/channel/history?account_id=local-b').json['items'],[])
+        self.channel.catalog.side_effect=ValueError('不可用')
+        self.assertEqual(self.client.get('/api/channel/catalog?account_id=local-b').status_code,400)
+
+    def test_missing_agent_does_not_submit(self):
+        self.payload.pop('agent_id')
+        self.assertEqual(self.client.post('/api/channel/messages',json=self.payload).status_code,400)
         self.channel.send.assert_not_called()
 
 

@@ -65,12 +65,19 @@ class ChannelClient:
         except (OSError, ValueError, urllib.error.URLError):
             raise ChannelError('Channel 连接未完成；如提交响应丢失，请保留原消息 ID 重试') from None
 
-    def send(self, account_id, message_id, text='', images=None, category='content_analysis', conversation_id='', context=None, reply_to='', new_task=False, surface=None, event_type=None):
+    def send(self, account_id, message_id, text='', images=None, category='content_analysis', conversation_id='', context=None, reply_to='', new_task=False, surface=None, event_type=None, route_id=None):
         payload = dict(source_id=self.source, account_id=str(account_id), message_id=message_id,
             category=category, conversation_id=conversation_id, content={'text': text, 'images': images or []}, context=compact_context(context or {}), reply_to=reply_to, new_task=new_task)
         if surface is not None or event_type is not None:
             payload.update(surface=surface or 'manual', event_type=event_type or 'manual.request')
+        if route_id: payload['route_id'] = route_id
         return self.request('POST', '/v1/messages', payload)
+
+    def catalog(self):
+        return self.request('GET', '/v1/catalog')
+
+    def bind(self, account_id, purpose, agent_id):
+        return self.request('POST', '/v1/bindings', dict(account_id=str(account_id), purpose=purpose, agent_id=agent_id))
 
     def status(self, event_id, account_id):
         return self.request('GET', '/v1/messages/' + urllib.parse.quote(event_id, safe='') + '?' + urllib.parse.urlencode({'account_id': str(account_id)}))

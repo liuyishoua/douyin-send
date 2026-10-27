@@ -1,13 +1,13 @@
 schema: 1
 targets:
   windows-x64:
-    artifact: .bifrost/packages/windows-x64/douyin.exe
+    artifact: .bifrost/packages/windows-x64/douyin-send.exe
     build_host: windows-x64
-    build: ["${PYTHON}", ../../python_desktop_build.py, douyin, windows-x64, "${OUTPUT}"]
+    build: ["${PYTHON}", ../../python_desktop_build.py, douyin-send, windows-x64, "${OUTPUT}"]
   macos-arm64:
-    artifact: .bifrost/packages/macos-arm64/douyin.app.zip
+    artifact: .bifrost/packages/macos-arm64/douyin-send.app.zip
     build_host: macos-arm64
-    build: ["${PYTHON}", ../../python_desktop_build.py, douyin, macos-arm64, "${OUTPUT}"]
+    build: ["${PYTHON}", ../../python_desktop_build.py, douyin-send, macos-arm64, "${OUTPUT}"]
   macos-x64:
-    artifact: .bifrost/packages/macos-x64/douyin-intel.app.zip
-    build: ["${PYTHON}", ../../python_desktop_build.py, douyin, macos-x64, "${OUTPUT}"]
+    artifact: .bifrost/packages/macos-x64/douyin-send-intel.app.zip
+    build: ["${PYTHON}", ../../python_desktop_build.py, douyin-send, macos-x64, "${OUTPUT}"]

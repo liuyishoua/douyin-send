@@ -109,6 +109,7 @@ async function api(path, method = "GET", body, extra = {}) {
     error.status = response.status;
     throw error;
   }
+  if (method !== 'GET') invalidatePages();
   return data;
 }
 const params = (obj) =>
@@ -152,33 +153,54 @@ async function submit(ev, work) {
     if (button) button.disabled = false;
   }
 }
+// Each cached page owns its generation and polling lifecycle.
+const pageCache = new Map();
+let activePage = null, pageSequence = 0;
+function invalidatePages() {
+  for (const [key, entry] of pageCache) if (!entry.edited) pageCache.delete(key);
+}
+function stashPage() {
+  if (!activePage || !activePage.ready) return;
+  activePage.nodes = [...app.childNodes];
+  activePage.scroll = [scrollX, scrollY];
+  activePage.scrollers = [...app.querySelectorAll('*')].filter(n => n.scrollTop || n.scrollLeft).map(n => [n, n.scrollLeft, n.scrollTop]);
+  activePage.bodyClass = document.body.className;
+  pageCache.set(activePage.path, activePage);
+  app.replaceChildren();
+  while (pageCache.size > 16) {
+    const candidate = [...pageCache].find(([, entry]) => !entry.edited);
+    if (!candidate) break;
+    pageCache.delete(candidate[0]);
+  }
+}
+document.addEventListener('input', event => { if (activePage && app.contains(event.target)) activePage.edited = true; });
+document.addEventListener('change', event => { if (activePage && app.contains(event.target)) activePage.edited = true; });
 function poll(work, ms = 1600) {
-  const token = generation;
-  let stopped = false;
+  const owner = activePage, token = generation;
+  const item = { stopped: false, pending: false, timer: null };
   function schedule() {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      tick();
-    }, ms);
-    timers.add(timer);
+    if (item.stopped || token !== generation) return;
+    item.timer = setTimeout(() => { timers.delete(item.timer); void tick(); }, ms);
+    timers.add(item.timer);
   }
   async function tick() {
-    if (stopped || token !== generation) return;
-    try {
-      await work();
-    } catch (err) {
-      if (token === generation) toast(err.message);
-    }
-    if (!stopped && token === generation) schedule();
+    if (item.stopped || item.pending || token !== generation) return;
+    item.pending = true;
+    try { if (!document.hidden) await work(); }
+    catch (err) { if (token === generation) toast(err.message); }
+    finally { item.pending = false; schedule(); }
   }
+  item.resume = () => { if (!item.pending && !item.stopped) void tick(); };
+  owner?.pollers.add(item);
   schedule();
-  return () => {
-    stopped = true;
-  };
+  return () => { item.stopped = true; clearTimeout(item.timer); timers.delete(item.timer); owner?.pollers.delete(item); };
 }
 function navigate(path) {
-  history.pushState({}, "", appURL(path));
-  render();
+  const target = appURL(path);
+  if (target === location.pathname + location.search) return;
+  stashPage();
+  history.pushState({}, '', target);
+  void render({ cached: true });
 }
 document.addEventListener("click", (ev) => {
   const link = ev.target.closest("a[data-nav]");
@@ -187,13 +209,13 @@ document.addEventListener("click", (ev) => {
     navigate(link.getAttribute("href"));
   }
 });
-window.addEventListener("popstate", render);
+window.addEventListener("popstate", () => { stashPage(); void render({ cached: true }); });
 function mode() {
   return `<span class="mode ${meta.demo ? "" : "live"}"><i class="dot"></i>${meta.demo ? "演示模式 · 模拟数据与发送" : "真实账号模式"}</span>`;
 }
 function shell(section, title, body) {
   document.body.className = "";
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><a href="search" data-nav class="brand"><span class="brandmark">♪</span><span>抖音工作台</span></a><div class="navcaption">WORKSPACE</div>${[
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><a href="search" data-nav class="brand"><span class="brandmark">♪</span><span>douyin-send</span></a><div class="navcaption">WORKSPACE</div>${[
     ["overview", "总览大盘"],
     ["search", "搜索入库"],
     ["users", "用户管理"],
@@ -209,7 +231,7 @@ function shell(section, title, body) {
     )
     .join(
       "",
-    )}<div class="sidefoot"><b>本地工作空间</b><br>让每一次连接，有迹可循。<br><span>DOUYIN CONSOLE · 01</span></div></aside><main class="main"><header class="topbar"><span>工作空间 <span style="margin:0 12px;color:#c5cbd4">/</span><strong>${e(title)}</strong></span>${mode()}</header><div class="content">${body}</div></main></div>`;
+    )}<div class="sidefoot"><b>本地工作空间</b><br>让每一次连接，有迹可循。<br><span>DOUYIN CONSOLE · 01</span></div></aside><main class="main"><header class="topbar"><span>工作空间 <span style="margin:0 12px;color:var(--ui-muted,#c5cbd4)">/</span><strong>${e(title)}</strong></span>${mode()}</header><div class="content">${body}</div></main></div>`;
 }
 function heading(english, title, subtitle, action = "") {
   return `<div class="pagehead"><div><div class="eyebrow">${english}</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action}</div>`;
@@ -286,7 +308,7 @@ function pagination(data) {
   return `<div class="pager"><span>共 ${data.total} 人 / ${pages} 页</span><div class="row"><button class="small" data-prev ${data.page <= 1 ? "disabled" : ""}>上一页</button><span>第 ${data.page} 页</span><button class="small" data-next ${data.page >= pages ? "disabled" : ""}>下一页</button></div></div>`;
 }
 function userTable(items, state, search) {
-  return `<div class="tablewrap"><table><thead><tr><th><input type="checkbox" aria-label="选择本页用户" data-page-select ${items.length && items.every((u) => state.selected.has(u.uid)) ? "checked" : ""}></th><th>用户 / 抖音号</th><th>粉丝数</th><th>累计获赞</th><th>蓝 V 认证</th>${search ? "<th>简介</th>" : "<th>来源 / 入库时间</th><th>发送状态</th><th>操作</th>"}</tr></thead><tbody>${items.map((u) => `<tr data-uid="${e(u.uid)}"><td><input type="checkbox" aria-label="选择 ${e(u.nickname)}" data-select-uid="${e(u.uid)}" ${state.selected.has(u.uid) ? "checked" : ""}></td><td>${person(u)}${!search ? `<div class="user-tags">${(u.tags || []).map((tag) => `<span class="user-tag">${e(tag.name)}</span>`).join("")}</div>` : ""}${u.sec_uid ? `<a class="hint" href="https://www.douyin.com/user/${encodeURIComponent(u.sec_uid)}" target="_blank" rel="noopener noreferrer">查看主页 ↗</a>` : ""}</td><td>${metric(u.follower_count)}</td><td>${metric(u.received_like_count)}</td><td class="textwrap">${u.is_blue_v === true ? `<span class="badge" style="color:#1671e8;background:#edf4ff">蓝 V · 企业认证</span><div class="hint">${e(u.enterprise_verify_reason || "")}</div>` : u.is_blue_v === false ? '<span class="hint">非蓝 V</span>' : '<span class="hint">未知 / 未采集</span>'}</td>${search ? `<td class="textwrap">${e(u.signature || "—")}</td>` : `<td>${e(u.source_keyword || "—")}<div class="hint">${date(u.created_at)}</div></td><td>${u.replied ? '<span class="badge reply"><i class="dot"></i>用户已回复</span>' : u.sent ? '<span class="badge sent"><i class="dot"></i>已发送</span><div class="hint">以平台发送成功为准</div>' : '<span class="badge">未发送</span>'}${u.replied ? `<div class="hint">${date(u.last_reply_at)}</div>` : u.last_sent_at ? `<div class="hint">${date(u.last_sent_at)}</div>` : ""}</td><td><button class="subtle small" data-tags-user="${e(u.uid)}">标签</button><button class="subtle small" data-edit="${e(u.uid)}">编辑</button><button class="subtle small" data-conversation="${e(u.uid)}">对话</button><button class="subtle small" data-history="${e(u.uid)}">历史</button></td>`}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="tablewrap"><table><thead><tr><th><input type="checkbox" aria-label="选择本页用户" data-page-select ${items.length && items.every((u) => state.selected.has(u.uid)) ? "checked" : ""}></th><th>用户 / 抖音号</th><th>粉丝数</th><th>累计获赞</th><th>蓝 V 认证</th>${search ? "<th>简介</th>" : "<th>来源 / 入库时间</th><th>发送状态</th><th>操作</th>"}</tr></thead><tbody>${items.map((u) => `<tr data-uid="${e(u.uid)}"><td><input type="checkbox" aria-label="选择 ${e(u.nickname)}" data-select-uid="${e(u.uid)}" ${state.selected.has(u.uid) ? "checked" : ""}></td><td>${person(u)}${!search ? `<div class="user-tags">${(u.tags || []).map((tag) => `<span class="user-tag">${e(tag.name)}</span>`).join("")}</div>` : ""}${u.sec_uid ? `<a class="hint" href="https://www.douyin.com/user/${encodeURIComponent(u.sec_uid)}" target="_blank" rel="noopener noreferrer">查看主页 ↗</a>` : ""}</td><td>${metric(u.follower_count)}</td><td>${metric(u.received_like_count)}</td><td class="textwrap">${u.is_blue_v === true ? `<span class="badge" style="color:var(--ui-accent,#1671e8);background:var(--ui-surface,#edf4ff)">蓝 V · 企业认证</span><div class="hint">${e(u.enterprise_verify_reason || "")}</div>` : u.is_blue_v === false ? '<span class="hint">非蓝 V</span>' : '<span class="hint">未知 / 未采集</span>'}</td>${search ? `<td class="textwrap">${e(u.signature || "—")}</td>` : `<td>${e(u.source_keyword || "—")}<div class="hint">${date(u.created_at)}</div></td><td>${u.replied ? '<span class="badge reply"><i class="dot"></i>用户已回复</span>' : u.sent ? '<span class="badge sent"><i class="dot"></i>已发送</span><div class="hint">以平台发送成功为准</div>' : '<span class="badge">未发送</span>'}${u.replied ? `<div class="hint">${date(u.last_reply_at)}</div>` : u.last_sent_at ? `<div class="hint">${date(u.last_sent_at)}</div>` : ""}</td><td><button class="subtle small" data-tags-user="${e(u.uid)}">标签</button><button class="subtle small" data-edit="${e(u.uid)}">编辑</button><button class="subtle small" data-conversation="${e(u.uid)}">对话</button><button class="subtle small" data-history="${e(u.uid)}">历史</button></td>`}</tr>`).join("")}</tbody></table></div>`;
 }
 function bindSelection(state, data, base, reload) {
   const update = () => {
@@ -817,7 +839,7 @@ function sendRecordDetail(row) {
   }
   const codeNames = {business_code:"业务码",http_status:"HTTP 状态",outer_status:"外层状态",send_status:"发送状态码",check_code:"校验码",response_code:"会话响应码",elapsed_ms:"耗时（毫秒）"};
   showDialog("对话详情",
-    `<div class="row spread">${badge(row.status)}<span class="hint">${e(row.task_name)}${row.task_deleted ? " · 任务已删除" : ""}</span></div><dl class="detailrows"><dt>发送账号</dt><dd>${e(row.account_name)}${row.account_uid ? ` · UID ${e(row.account_uid)}` : ""}</dd><dt>接收者</dt><dd>${e(row.nickname || row.uid)}${row.is_blue_v === true ? ` <span class="badge" style="color:#1671e8;background:#edf4ff" title="${e(row.enterprise_verify_reason || "")}">蓝 V · 企业认证</span>` : ""} · UID ${e(row.uid)}</dd><dt>消息归属</dt><dd>${e(messageNumberLabel(row))}</dd><dt>发起时间</dt><dd>${date(row.attempted_at)}</dd><dt>结果记录时间</dt><dd>${date(row.finished_at || row.sent_at)}</dd></dl><p class="hint">${["snapshot","manual"].includes(row.message_source) ? "实际发送正文快照" : row.message_source === "legacy_task" ? "旧记录未保存逐条正文，以下为保留的旧任务正文" : "旧记录未保存正文"}</p>${recordMessageContent(row,true)}${row.error ? `<div class="errorbox">${e(row.error)}</div>` : ""}${row.result_note ? `<p class="hint">${e(row.result_note)}</p>` : ""}<dl class="detailrows">${Object.entries(codeNames).map(([key,label]) => `<dt>${label}</dt><dd>${e(row.codes[key] ?? "未记录")}</dd>`).join("")}</dl><p class="hint">${row.has_diagnostic ? "仅展示已记录的响应字段；业务码未记录不等于 0。" : "该旧记录没有响应诊断，无法还原当时的状态码。"} 成功按当前统计口径记录，不保证实际送达或已读。</p>`,
+    `<div class="row spread">${badge(row.status)}<span class="hint">${e(row.task_name)}${row.task_deleted ? " · 任务已删除" : ""}</span></div><dl class="detailrows"><dt>发送账号</dt><dd>${e(row.account_name)}${row.account_uid ? ` · UID ${e(row.account_uid)}` : ""}</dd><dt>接收者</dt><dd>${e(row.nickname || row.uid)}${row.is_blue_v === true ? ` <span class="badge" style="color:var(--ui-accent,#1671e8);background:var(--ui-surface,#edf4ff)" title="${e(row.enterprise_verify_reason || "")}">蓝 V · 企业认证</span>` : ""} · UID ${e(row.uid)}</dd><dt>消息归属</dt><dd>${e(messageNumberLabel(row))}</dd><dt>发起时间</dt><dd>${date(row.attempted_at)}</dd><dt>结果记录时间</dt><dd>${date(row.finished_at || row.sent_at)}</dd></dl><p class="hint">${["snapshot","manual"].includes(row.message_source) ? "实际发送正文快照" : row.message_source === "legacy_task" ? "旧记录未保存逐条正文，以下为保留的旧任务正文" : "旧记录未保存正文"}</p>${recordMessageContent(row,true)}${row.error ? `<div class="errorbox">${e(row.error)}</div>` : ""}${row.result_note ? `<p class="hint">${e(row.result_note)}</p>` : ""}<dl class="detailrows">${Object.entries(codeNames).map(([key,label]) => `<dt>${label}</dt><dd>${e(row.codes[key] ?? "未记录")}</dd>`).join("")}</dl><p class="hint">${row.has_diagnostic ? "仅展示已记录的响应字段；业务码未记录不等于 0。" : "该旧记录没有响应诊断，无法还原当时的状态码。"} 成功按当前统计口径记录，不保证实际送达或已读。</p>`,
     '<button data-close>关闭</button>');
 }
 async function sendDetailsPage() {
@@ -859,7 +881,7 @@ async function sendDetailsPage() {
       : [["匹配记录",data.total],["成功",data.summary.sent],["失败",data.summary.failed]];
     document.querySelector("#send-record-summary").innerHTML = stats.map(([label,value]) => `<div class="stat"><span>${label}</span><strong>${metric(value)}</strong></div>`).join("");
     document.querySelector("#send-record-list").innerHTML = data.items.length
-      ? `<div class="tablewrap"><table><thead><tr><th>消息时间</th><th>消息归属</th><th>执行账号 / 任务</th><th>用户</th><th>消息内容</th><th>结果 / 业务码</th><th>原因</th><th>操作</th></tr></thead><tbody>${data.items.map((row,index) => `<tr><td>${date(row.attempted_at)}</td><td>${e(messageNumberLabel(row))}</td><td><strong>${e(row.account_name)}</strong><div class="hint">${e(row.task_name)}${row.task_deleted ? " · 已删除" : ""}</div></td><td>${e(row.nickname || row.uid)}${row.is_blue_v === true ? ` <span class="badge" style="color:#1671e8;background:#edf4ff" title="${e(row.enterprise_verify_reason || "")}">蓝 V · 企业认证</span>` : ""}<div class="hint">UID ${e(row.uid)}</div></td><td class="textwrap"><div class="record-content">${recordMessageContent(row)}</div>${row.message_source === "legacy_task" ? '<div class="hint">旧任务正文 · 非逐条快照</div>' : ""}</td><td>${row.direction === "incoming" ? '<span class="badge reply">用户回复</span>' : badge(row.status)}${row.message_source === "conversation" ? '<div class="hint">会话消息</div>' : `<div class="hint">业务码 ${e(row.business_code ?? "未记录")}</div>`}</td><td class="textwrap">${e(row.error || (row.direction === "incoming" ? "已收到回复" : row.message_source === "conversation" ? "已记录发送" : "发送成功"))}${row.result_note ? `<div class="hint">${e(row.result_note)}</div>` : ""}</td><td><div class="row"><button class="subtle small" data-send-record="${index}">查看详情</button><button class="subtle small" data-record-conversation="${index}" ${row.account_id ? "" : 'disabled title="旧记录未记录发送账号，无法定位对话"'}>对话</button></div></td></tr>`).join("")}</tbody></table></div>${pagination(data).replace(" 人 /", " 条记录 /")}`
+      ? `<div class="tablewrap"><table><thead><tr><th>消息时间</th><th>消息归属</th><th>执行账号 / 任务</th><th>用户</th><th>消息内容</th><th>结果 / 业务码</th><th>原因</th><th>操作</th></tr></thead><tbody>${data.items.map((row,index) => `<tr><td>${date(row.attempted_at)}</td><td>${e(messageNumberLabel(row))}</td><td><strong>${e(row.account_name)}</strong><div class="hint">${e(row.task_name)}${row.task_deleted ? " · 已删除" : ""}</div></td><td>${e(row.nickname || row.uid)}${row.is_blue_v === true ? ` <span class="badge" style="color:var(--ui-accent,#1671e8);background:var(--ui-surface,#edf4ff)" title="${e(row.enterprise_verify_reason || "")}">蓝 V · 企业认证</span>` : ""}<div class="hint">UID ${e(row.uid)}</div></td><td class="textwrap"><div class="record-content">${recordMessageContent(row)}</div>${row.message_source === "legacy_task" ? '<div class="hint">旧任务正文 · 非逐条快照</div>' : ""}</td><td>${row.direction === "incoming" ? '<span class="badge reply">用户回复</span>' : badge(row.status)}${row.message_source === "conversation" ? '<div class="hint">会话消息</div>' : `<div class="hint">业务码 ${e(row.business_code ?? "未记录")}</div>`}</td><td class="textwrap">${e(row.error || (row.direction === "incoming" ? "已收到回复" : row.message_source === "conversation" ? "已记录发送" : "发送成功"))}${row.result_note ? `<div class="hint">${e(row.result_note)}</div>` : ""}</td><td><div class="row"><button class="subtle small" data-send-record="${index}">查看详情</button><button class="subtle small" data-record-conversation="${index}" ${row.account_id ? "" : 'disabled title="旧记录未记录发送账号，无法定位对话"'}>对话</button></div></td></tr>`).join("")}</tbody></table></div>${pagination(data).replace(" 人 /", " 条记录 /")}`
       : empty("没有匹配的消息记录", "可调整分类和筛选条件。");
     onAll("[data-send-record]", "click", ev => sendRecordDetail(data.items[Number(ev.currentTarget.dataset.sendRecord)]));
     onAll("[data-record-conversation]", "click", ev => {
@@ -1078,7 +1100,7 @@ async function taskPage(id) {
     if (token !== generation) return;
     const c = t.counts;
     document.querySelector("#task-detail").innerHTML =
-      `${heading("TASK DETAIL", e(t.name), `任务 #${e(t.id)} · 创建于 ${date(t.created_at)}`, taskActions(t))}${t.error ? `<div class="errorbox">${e(t.error)}</div>` : ""}${t.status === "pending" ? '<div class="callout">任务已保存，尚未开始。确认账号、消息与接收者后，点击「开始任务」。</div>' : ""}<div class="stats"><div class="stat"><span>全部接收者</span><strong>${c.total}</strong></div><div class="stat"><span>发送成功</span><strong style="color:#39a482">${c.sent}</strong></div><div class="stat"><span>失败 / 跳过</span><strong>${c.failed} <span style="display:inline;font-size:18px">/ ${c.skipped}</span></strong></div><div class="stat"><span>待处理</span><strong>${remaining(c)}</strong></div></div><div class="detailgrid"><section class="panel"><div class="paneltitle"><h2>消息与配置</h2>${["pending", "running", "paused"].includes(t.status) ? `<button class="subtle small" id="edit-task-config">${t.status === "pending" ? "编辑配置" : "调整执行配置"}</button>` : ""}</div><div class="panelbody"><div class="row spread"><span class="hint">执行账号 · ${e(t.account_name)}</span>${badge(t.status)}</div><div class="message">${e(t.message)}</div>${t.first_messages?.length>1?`<p class="hint">首次发送：${t.first_messages.length} 条候选文案，逐联系人随机一条。</p>`:""}<p class="hint">发送成功不代表接收端送达或已读。</p></div></section><section class="panel"><div class="paneltitle"><h2>执行安排</h2></div><div class="panelbody"><dl class="detailrows"><dt>执行模式</dt><dd>${t.execution_mode === "auto" ? "自动分配账号" : "指定账号"}</dd><dt>发送节奏</dt><dd>按各账号配置执行 · <a href="accounts" data-nav>账号管理 ↗</a></dd><dt>允许累计失败</dt><dd>${t.max_errors ?? 1000} 次（当前 ${c.failed} 次）</dd><dt>允许连续失败</dt><dd>${t.max_consecutive_errors ?? 1000} 次（当前 ${t.consecutive_errors ?? 0} 次）</dd><dt>回复后跟进</dt><dd>独立排队，同组图文连续发送；不等待首发冷却或休息，暂停与工作时间仍生效</dd><dt>回复回查间隔</dt><dd>${t.reply_messages?.length===0 ? "未配置后续文字或图片，不回查回复" : `${t.reply_check_interval_minutes ? `每 ${e(t.reply_check_interval_minutes)} 分钟回查成功未回复用户` : "周期回查已关闭"} · 结束后补查一轮`}</dd><dt>下次回复回查</dt><dd>${date(t.reply_check_next_at)}</dd><dt>自动暂停条件</dt><dd>累计与连续失败均超过上限</dd><dt>预约时间</dt><dd>${date(t.scheduled_at)}</dd><dt>开始时间</dt><dd>${date(t.started_at)}</dd><dt>${t.execution_mode === "auto" ? "调度状态" : "最早可调度时间"}</dt><dd>${t.status === "running" ? t.execution_mode === "auto" ? e(t.wait_reason || "正在发送，后续按账号分配") : date(t.next_send_at) : "—"}</dd><dt>结束时间</dt><dd>${date(t.finished_at)}</dd></dl></div></section></div>`;
+      `${heading("TASK DETAIL", e(t.name), `任务 #${e(t.id)} · 创建于 ${date(t.created_at)}`, taskActions(t))}${t.error ? `<div class="errorbox">${e(t.error)}</div>` : ""}${t.status === "pending" ? '<div class="callout">任务已保存，尚未开始。确认账号、消息与接收者后，点击「开始任务」。</div>' : ""}<div class="stats"><div class="stat"><span>全部接收者</span><strong>${c.total}</strong></div><div class="stat"><span>发送成功</span><strong style="color:var(--ui-positive,#39a482)">${c.sent}</strong></div><div class="stat"><span>失败 / 跳过</span><strong>${c.failed} <span style="display:inline;font-size:18px">/ ${c.skipped}</span></strong></div><div class="stat"><span>待处理</span><strong>${remaining(c)}</strong></div></div><div class="detailgrid"><section class="panel"><div class="paneltitle"><h2>消息与配置</h2>${["pending", "running", "paused"].includes(t.status) ? `<button class="subtle small" id="edit-task-config">${t.status === "pending" ? "编辑配置" : "调整执行配置"}</button>` : ""}</div><div class="panelbody"><div class="row spread"><span class="hint">执行账号 · ${e(t.account_name)}</span>${badge(t.status)}</div><div class="message">${e(t.message)}</div>${t.first_messages?.length>1?`<p class="hint">首次发送：${t.first_messages.length} 条候选文案，逐联系人随机一条。</p>`:""}<p class="hint">发送成功不代表接收端送达或已读。</p></div></section><section class="panel"><div class="paneltitle"><h2>执行安排</h2></div><div class="panelbody"><dl class="detailrows"><dt>执行模式</dt><dd>${t.execution_mode === "auto" ? "自动分配账号" : "指定账号"}</dd><dt>发送节奏</dt><dd>按各账号配置执行 · <a href="accounts" data-nav>账号管理 ↗</a></dd><dt>允许累计失败</dt><dd>${t.max_errors ?? 1000} 次（当前 ${c.failed} 次）</dd><dt>允许连续失败</dt><dd>${t.max_consecutive_errors ?? 1000} 次（当前 ${t.consecutive_errors ?? 0} 次）</dd><dt>回复后跟进</dt><dd>独立排队，同组图文连续发送；不等待首发冷却或休息，暂停与工作时间仍生效</dd><dt>回复回查间隔</dt><dd>${t.reply_messages?.length===0 ? "未配置后续文字或图片，不回查回复" : `${t.reply_check_interval_minutes ? `每 ${e(t.reply_check_interval_minutes)} 分钟回查成功未回复用户` : "周期回查已关闭"} · 结束后补查一轮`}</dd><dt>下次回复回查</dt><dd>${date(t.reply_check_next_at)}</dd><dt>自动暂停条件</dt><dd>累计与连续失败均超过上限</dd><dt>预约时间</dt><dd>${date(t.scheduled_at)}</dd><dt>开始时间</dt><dd>${date(t.started_at)}</dd><dt>${t.execution_mode === "auto" ? "调度状态" : "最早可调度时间"}</dt><dd>${t.status === "running" ? t.execution_mode === "auto" ? e(t.wait_reason || "正在发送，后续按账号分配") : date(t.next_send_at) : "—"}</dd><dt>结束时间</dt><dd>${date(t.finished_at)}</dd></dl></div></section></div>`;
     document.querySelector("#task-detail").insertAdjacentHTML("beforeend", replyReviewPanel(t.reply_review, date, t));
     bindTaskActions(t, load);
     bind("#edit-task-config", "click", () => editTaskDialog(t, load));
@@ -1373,7 +1395,7 @@ async function accountsPage() {
         ]);
         if (qr.dataset.state !== status) {
           qr.dataset.state = status;
-          qr.innerHTML = `<div style="text-align:center"><p>${a.qr_status === "confirmed" ? `账号已绑定（UID ${e(a.uid)}），登录状态已保存。` : a.uid ? `请使用已绑定的抖音账号「${e(a.name)}」扫码（UID ${e(a.uid)}），确保身份一致。` : `请账号本人使用抖音 App 扫码确认，登录后自动绑定到「${e(a.name)}」。`}</p>${a.qr_status === "verifying" ? `<div class="qrplaceholder">平台要求二次验证<br><a class="primary" target="_blank" rel="noopener" href="static/verification.html?account=${encodeURIComponent(a.id)}">打开官方验证</a><p class="hint">完成后将继续本次登录，无需重复扫码。</p></div>` : a.qr_status === "confirmed" ? `<div class="qrplaceholder" style="color:#3da884">✓ 登录已完成<br>${a.can_send ? "凭证已保存，可用于搜索和发送" : "会话已保存，发送状态待检查"}</div>` : a.qr_url ? `<img class="qrcode" alt="账号授权二维码" src="${APP_PREFIX}/api/accounts/${encodeURIComponent(a.id)}/qr-image">` : `<div class="qrplaceholder">${a.qr_status === "failed" ? "扫码登录失败，请重新发起" : a.qr_status === "interrupted" ? "扫码已中断，请重新发起" : meta.demo ? "演示二维码<br>请点击下方模拟扫码确认" : "正在获取二维码…"}</div>`}${badge(a.qr_status)}${a.error ? `<p class="danger">${e(a.error)}</p>` : ""}</div>`;
+          qr.innerHTML = `<div style="text-align:center"><p>${a.qr_status === "confirmed" ? `账号已绑定（UID ${e(a.uid)}），登录状态已保存。` : a.uid ? `请使用已绑定的抖音账号「${e(a.name)}」扫码（UID ${e(a.uid)}），确保身份一致。` : `请账号本人使用抖音 App 扫码确认，登录后自动绑定到「${e(a.name)}」。`}</p>${a.qr_status === "verifying" ? `<div class="qrplaceholder">平台要求二次验证<br><a class="primary" target="_blank" rel="noopener" href="static/verification.html?account=${encodeURIComponent(a.id)}">打开官方验证</a><p class="hint">完成后将继续本次登录，无需重复扫码。</p></div>` : a.qr_status === "confirmed" ? `<div class="qrplaceholder" style="color:var(--ui-positive,#3da884)">✓ 登录已完成<br>${a.can_send ? "凭证已保存，可用于搜索和发送" : "会话已保存，发送状态待检查"}</div>` : a.qr_url ? `<img class="qrcode" alt="账号授权二维码" src="${APP_PREFIX}/api/accounts/${encodeURIComponent(a.id)}/qr-image">` : `<div class="qrplaceholder">${a.qr_status === "failed" ? "扫码登录失败，请重新发起" : a.qr_status === "interrupted" ? "扫码已中断，请重新发起" : meta.demo ? "演示二维码<br>请点击下方模拟扫码确认" : "正在获取二维码…"}</div>`}${badge(a.qr_status)}${a.error ? `<p class="danger">${e(a.error)}</p>` : ""}</div>`;
           const simulate = dialog.querySelector("#simulate-qr");
           if (simulate) simulate.hidden = a.qr_status !== "waiting";
         }
@@ -1488,7 +1510,7 @@ async function dashboardPage(id) {
       const eventScrollHeight = eventList?.scrollHeight || 0;
       const pageScroll = { left: window.scrollX, top: window.scrollY };
       document.querySelector("#dash-content").innerHTML =
-        `<div class="dashheading"><div><div class="eyebrow">MISSION CONTROL · TASK ${e(t.id)}</div><h1>${e(t.name)}</h1><p class="subtitle">执行账号 ${e(t.account_name)} <span style="margin:0 10px;color:#375071">/</span> ${t.execution_mode === "auto" ? "自动分配账号" : "指定账号"} · 发送节奏按账号配置 · 累计允许失败 ${t.max_errors ?? 1000} 次、连续允许 ${t.max_consecutive_errors ?? 1000} 次 · 两项都超过才暂停（当前连续 ${t.consecutive_errors ?? 0} 次）</p></div>${taskActions(t, true)}</div>${t.error ? `<div class="errorbox">${e(t.error)}</div>` : ""}<div class="dashgrid"><section class="dashpanel mission"><div class="missiontop"><span class="dashlabel">整体执行进度 / PROGRESS</span>${badge(t.status)}</div><div class="missionmain"><div class="orbit"><svg viewBox="0 0 180 180" aria-label="已处理 ${percent}%"><defs><linearGradient id="ring-gradient"><stop stop-color="#2372ee"/><stop offset="1" stop-color="#65e2ff"/></linearGradient></defs><circle cx="90" cy="90" r="80"/><circle class="arc" cx="90" cy="90" r="80" stroke-dasharray="${(circumference * percent) / 100} ${circumference}"/><circle cx="90" cy="90" r="68" style="stroke-width:1;stroke-dasharray:2 8"/></svg><div class="orbittext"><strong>${percent}<small style="font-size:18px">%</small></strong><span>已处理目标</span></div></div><div class="missionnumbers"><div class="dashlabel" style="margin-bottom:12px">发送成功 / 全部接收者</div><div class="big">${c.sent}<small>/ ${c.total}</small></div><p>${t.status === "completed" ? "所有目标已处理，请查看各项结果" : t.status === "pending" ? "尚未开始，等待你确认执行" : t.status === "paused" ? "任务已暂停，等待恢复" : t.status === "interrupted" ? "执行已中断，请核对状态" : t.phase === "sending" ? "正在向平台提交消息请求" : (t.wait_reason || "后台按计划等待下一次执行")}</p><div class="missionlegend"><span><i class="dot" style="color:#51c7b4"></i> 确认<b>${c.sent}</b></span><span><i class="dot" style="color:#e796a2"></i> 失败<b>${c.failed}</b></span><span><i class="dot" style="color:#b2a0e3"></i> 跳过<b>${c.skipped}</b></span></div></div></div><div class="mission-next"><div><span>${t.execution_mode === "auto" ? "共享池调度" : "最早可调度时间"}</span><small>${t.status === "running" && t.phase === "sending" ? "当前请求完成后按账号安排" : t.status === "running" && t.next_send_at ? date(t.next_send_at) : t.status === "paused" ? "恢复任务后继续" : (t.wait_reason || "暂无执行计划")}</small></div><strong class="countdown" id="countdown">—</strong></div></section><section class="dashpanel targetpanel"><div class="row spread"><span class="dashlabel">当前接收者 / RECIPIENT</span><span class="dashsmall">${d.current?.status === "sending" ? "请求进行中" : d.current ? "下一位接收者" : "等待下一次请求"}</span></div>${d.current_recipients?.length ? `<div class="parallel-targets">${d.current_recipients.map(u => `<div><span class="dashsmall">${e(u.account_name)}</span>${person(u)}</div>`).join("")}</div>` : d.current ? person(d.current) : `<div class="person"><span class="avatar">—</span><div><strong>${t.status === "completed" ? "本次任务已结束" : "当前没有发送中的用户"}</strong><small>${t.status === "pending" ? "开始后展示实际接收者" : "仅在请求执行时显示当前目标"}</small></div></div>`}<div class="message">${e(t.message)}</div></section></div><div class="dashstats"><div class="dashstat success"><span><i class="dot"></i> 发送成功</span><strong>${c.sent}</strong></div><div class="dashstat failed"><span><i class="dot"></i> 执行失败</span><strong>${c.failed}</strong></div><div class="dashstat skipped"><span><i class="dot"></i> 已跳过</span><strong>${c.skipped}</strong></div><div class="dashstat pending"><span><i class="dot"></i> 剩余目标</span><strong>${remaining(c)}</strong></div></div><div class="dashgrid"><section class="dashpanel chartpanel"><div class="chartheader"><h2>实际发送节奏</h2><span>按分钟 · <b style="color:#44b5ff;font-weight:400">确认</b> / <b style="color:#d77d94;font-weight:400">失败</b> / 请求</span></div>${trendChart(d.trend || [])}</section><section class="dashpanel eventpanel"><div class="chartheader"><h2>执行事件流</h2><span>最新 ${d.events.length} 条记录</span></div><div class="events">${
+        `<div class="dashheading"><div><div class="eyebrow">MISSION CONTROL · TASK ${e(t.id)}</div><h1>${e(t.name)}</h1><p class="subtitle">执行账号 ${e(t.account_name)} <span style="margin:0 10px;color:var(--ui-muted,#375071)">/</span> ${t.execution_mode === "auto" ? "自动分配账号" : "指定账号"} · 发送节奏按账号配置 · 累计允许失败 ${t.max_errors ?? 1000} 次、连续允许 ${t.max_consecutive_errors ?? 1000} 次 · 两项都超过才暂停（当前连续 ${t.consecutive_errors ?? 0} 次）</p></div>${taskActions(t, true)}</div>${t.error ? `<div class="errorbox">${e(t.error)}</div>` : ""}<div class="dashgrid"><section class="dashpanel mission"><div class="missiontop"><span class="dashlabel">整体执行进度 / PROGRESS</span>${badge(t.status)}</div><div class="missionmain"><div class="orbit"><svg viewBox="0 0 180 180" aria-label="已处理 ${percent}%"><defs><linearGradient id="ring-gradient"><stop stop-color="var(--ui-accent,#2372ee)"/><stop offset="1" stop-color="var(--ui-accent,#65e2ff)"/></linearGradient></defs><circle cx="90" cy="90" r="80"/><circle class="arc" cx="90" cy="90" r="80" stroke-dasharray="${(circumference * percent) / 100} ${circumference}"/><circle cx="90" cy="90" r="68" style="stroke-width:1;stroke-dasharray:2 8"/></svg><div class="orbittext"><strong>${percent}<small style="font-size:18px">%</small></strong><span>已处理目标</span></div></div><div class="missionnumbers"><div class="dashlabel" style="margin-bottom:12px">发送成功 / 全部接收者</div><div class="big">${c.sent}<small>/ ${c.total}</small></div><p>${t.status === "completed" ? "所有目标已处理，请查看各项结果" : t.status === "pending" ? "尚未开始，等待你确认执行" : t.status === "paused" ? "任务已暂停，等待恢复" : t.status === "interrupted" ? "执行已中断，请核对状态" : t.phase === "sending" ? "正在向平台提交消息请求" : (t.wait_reason || "后台按计划等待下一次执行")}</p><div class="missionlegend"><span><i class="dot" style="color:var(--ui-positive,#51c7b4)"></i> 确认<b>${c.sent}</b></span><span><i class="dot" style="color:var(--ui-danger,#e796a2)"></i> 失败<b>${c.failed}</b></span><span><i class="dot" style="color:var(--ui-purple,#b2a0e3)"></i> 跳过<b>${c.skipped}</b></span></div></div></div><div class="mission-next"><div><span>${t.execution_mode === "auto" ? "共享池调度" : "最早可调度时间"}</span><small>${t.status === "running" && t.phase === "sending" ? "当前请求完成后按账号安排" : t.status === "running" && t.next_send_at ? date(t.next_send_at) : t.status === "paused" ? "恢复任务后继续" : (t.wait_reason || "暂无执行计划")}</small></div><strong class="countdown" id="countdown">—</strong></div></section><section class="dashpanel targetpanel"><div class="row spread"><span class="dashlabel">当前接收者 / RECIPIENT</span><span class="dashsmall">${d.current?.status === "sending" ? "请求进行中" : d.current ? "下一位接收者" : "等待下一次请求"}</span></div>${d.current_recipients?.length ? `<div class="parallel-targets">${d.current_recipients.map(u => `<div><span class="dashsmall">${e(u.account_name)}</span>${person(u)}</div>`).join("")}</div>` : d.current ? person(d.current) : `<div class="person"><span class="avatar">—</span><div><strong>${t.status === "completed" ? "本次任务已结束" : "当前没有发送中的用户"}</strong><small>${t.status === "pending" ? "开始后展示实际接收者" : "仅在请求执行时显示当前目标"}</small></div></div>`}<div class="message">${e(t.message)}</div></section></div><div class="dashstats"><div class="dashstat success"><span><i class="dot"></i> 发送成功</span><strong>${c.sent}</strong></div><div class="dashstat failed"><span><i class="dot"></i> 执行失败</span><strong>${c.failed}</strong></div><div class="dashstat skipped"><span><i class="dot"></i> 已跳过</span><strong>${c.skipped}</strong></div><div class="dashstat pending"><span><i class="dot"></i> 剩余目标</span><strong>${remaining(c)}</strong></div></div><div class="dashgrid"><section class="dashpanel chartpanel"><div class="chartheader"><h2>实际发送节奏</h2><span>按分钟 · <b style="color:var(--ui-accent,#44b5ff);font-weight:400">确认</b> / <b style="color:var(--ui-danger,#d77d94);font-weight:400">失败</b> / 请求</span></div>${trendChart(d.trend || [])}</section><section class="dashpanel eventpanel"><div class="chartheader"><h2>执行事件流</h2><span>最新 ${d.events.length} 条记录</span></div><div class="events">${
           d.events.length
             ? [...d.events]
                 .reverse()
@@ -1758,14 +1780,27 @@ async function overviewPage() {
   poll(countdown, 500);
 }
 
-async function render() {
-  generation++;
+async function render({ cached = false } = {}) {
+  const pathKey = location.pathname + location.search;
+  const saved = cached ? pageCache.get(pathKey) : null;
+  if (!cached) invalidatePages();
+  generation = saved?.token || ++pageSequence;
   timers.forEach(clearTimeout);
   timers.clear();
   closeConversation?.();
   closeConversation = null;
   dialog.close();
   const token = generation;
+  if (saved) {
+    activePage = saved; pageCache.delete(pathKey);
+    app.replaceChildren(...saved.nodes); document.body.className = saved.bodyClass;
+    for (const [node, x, y] of saved.scrollers) node.scrollTo(x, y);
+    window.scrollTo(...saved.scroll);
+    for (const item of saved.pollers) item.resume();
+    return;
+  }
+  const entry = { token, path: pathKey, pollers: new Set(), ready: false, edited: false };
+  activePage = entry;
   try {
     const path = location.pathname.slice(APP_PREFIX.length) || "/";
     if (["/", "/search", "/users"].includes(path)) {
@@ -1796,6 +1831,8 @@ async function render() {
         `<div class="errorbox">${e(err.message)}</div><button id="retry">重新加载</button>`,
       );
     bind("#retry", "click", render);
+  } finally {
+    if (token === generation) entry.ready = true;
   }
 }
 shell("", "正在连接", empty("正在加载工作空间", "正在确认运行模式。"));

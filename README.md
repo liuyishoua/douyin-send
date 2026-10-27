@@ -1,4 +1,4 @@
-# douyin
+# douyin-send
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange)](LICENSE)
 
@@ -39,8 +39,8 @@ Python 后端、原生 HTML/JS 前端、SQLite 数据库，无需 Bifrost 或前
 先安装 **Python 3.10+**，克隆仓库后运行：
 
 ```bash
-git clone https://github.com/liuyishoua/douyin.git
-cd douyin
+git clone https://github.com/liuyishoua/douyin-send.git douyin-send
+cd douyin-send
 ```
 
 ```bash
@@ -106,14 +106,14 @@ node --check web/static/app.js
 ## Docker（可选）
 
 ```bash
-docker build -t douyin .
-docker run --rm -p 127.0.0.1:8765:8765 -v douyin-data:/app/datas douyin
+docker build -t douyin-send .
+docker run --rm -p 127.0.0.1:8765:8765 -v douyin-send-data:/app/datas douyin-send
 ```
 
 默认演示模式。真实模式运行：
 
 ```bash
-docker run --rm -p 127.0.0.1:8765:8765 -v douyin-data:/app/datas douyin python -m web --host 0.0.0.0
+docker run --rm -p 127.0.0.1:8765:8765 -v douyin-send-data:/app/datas douyin-send python -m web --host 0.0.0.0
 ```
 
 ## 目录

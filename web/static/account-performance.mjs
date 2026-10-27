@@ -16,9 +16,9 @@ export function errorRateChart(buckets, series) {
     else group.push(`${x(i)},${y(point.error_rate)}`);
   });
   if (group.length) groups.push(group);
-  const paths = groups.map(points => `<polyline points="${points.join(' ')}" fill="none" stroke="#f0a0ae" stroke-width="2.5" stroke-linejoin="round"/>`).join('');
-  const dots = series.map((p,i) => p.error_rate == null ? '' : `<circle cx="${x(i)}" cy="${y(p.error_rate)}" r="3" fill="#f0a0ae"/>`).join('');
-  return `<div class="interactive-chart" data-chart-id="account-performance-trend"><svg class="history-curve chart" viewBox="0 0 650 210" role="group" aria-label="账号错误率趋势，纵轴0至100%">${[0,.5,1].map(rate => `<line x1="${left}" x2="${right}" y1="${y(rate)}" y2="${y(rate)}"/><text x="2" y="${y(rate)+4}">${rate*100}%</text>`).join('')}${paths}${dots}<g class="line-marker" visibility="hidden"><line y1="${top}" y2="${bottom}"/><circle r="5" fill="#f0a0ae" stroke="#ecf8ff" stroke-width="2"/></g>${series.map((p,i) => {
+  const paths = groups.map(points => `<polyline points="${points.join(' ')}" fill="none" stroke="var(--ui-danger,#f0a0ae)" stroke-width="2.5" stroke-linejoin="round"/>`).join('');
+  const dots = series.map((p,i) => p.error_rate == null ? '' : `<circle cx="${x(i)}" cy="${y(p.error_rate)}" r="3" fill="var(--ui-danger,#f0a0ae)"/>`).join('');
+  return `<div class="interactive-chart" data-chart-id="account-performance-trend"><svg class="history-curve chart" viewBox="0 0 650 210" role="group" aria-label="账号错误率趋势，纵轴0至100%">${[0,.5,1].map(rate => `<line x1="${left}" x2="${right}" y1="${y(rate)}" y2="${y(rate)}"/><text x="2" y="${y(rate)+4}">${rate*100}%</text>`).join('')}${paths}${dots}<g class="line-marker" visibility="hidden"><line y1="${top}" y2="${bottom}"/><circle r="5" fill="var(--ui-danger,#f0a0ae)" stroke="var(--ui-text,#ecf8ff)" stroke-width="2"/></g>${series.map((p,i) => {
     if (p.error_rate == null) return '';
     const begin = i ? (x(i-1)+x(i))/2 : left;
     const end = i<series.length-1 ? (x(i)+x(i+1))/2 : right;
